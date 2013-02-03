@@ -1,18 +1,21 @@
-# = net/telnet.rb - Simple Telnet Client Library
+# = celluloid/net/telnet.rb - Evented Telnet Client Library
 #
+# based upon net/telnet.rb - Simple Telnet Client Library
 # Author:: Wakou Aoyama <wakou@ruby-lang.org>
 # Documentation:: William Webber and Wakou Aoyama
+# Ported to Celluloid by Philipp Berndt <philipp.berndt@gmx.net>
 #
-# This file holds the class Net::Telnet, which provides client-side
-# telnet functionality.
+# This file holds the class Celluloid::Net::Telnet, which provides
+# evented client-side telnet functionality.
 #
 # For documentation, see Net::Telnet.
 #
 
-require "socket"
+require "celluloid/io"
 require "timeout"
 require "English"
 
+module Celluloid
 module Net
 
   #
@@ -163,7 +166,7 @@ module Net
     CR   = "\015"
     LF   = "\012"
     EOL  = CR + LF
-    REVISION = '$Id: telnet.rb 31641 2011-05-19 00:07:25Z nobu $'
+    REVISION = '$Id$'
     # :startdoc:
 
     #
@@ -345,10 +348,10 @@ module Net
 
         begin
           if @options["Timeout"] == false
-            @sock = TCPSocket.open(@options["Host"], @options["Port"])
+            @sock = Celluloid::IO::TCPSocket.new(@options["Host"], @options["Port"])
           else
             timeout(@options["Timeout"]) do
-              @sock = TCPSocket.open(@options["Host"], @options["Port"])
+              @sock = Celluloid::IO::TCPSocket.new(@options["Host"], @options["Port"])
             end
           end
         rescue TimeoutError
@@ -358,8 +361,8 @@ module Net
           @dumplog.log_dump('#', $ERROR_INFO.to_s + "\n") if @options.has_key?("Dump_log")
           raise
         end
-        @sock.sync = true
-        @sock.binmode
+        @sock.to_io.sync = true
+        @sock.to_io.binmode
 
         message = "Connected to " + @options["Host"] + ".\n"
         yield(message) if block_given?
@@ -489,6 +492,28 @@ module Net
       end
     end # preprocess
 
+    # Wait until data becomes available, optionally with a timeout.
+    #
+    # +time_out+ can be either the number of seconds before timing out
+    # or nil for no timeout.
+    # Returns true if data is available and false if the timeout occurred.
+    #
+    def wait_readable(time_out=nil)
+      if time_out
+        begin
+          timeout(time_out) do
+            @sock.wait_readable
+            true
+          end
+        rescue Timeout::Error
+          false
+        end
+      else
+        @sock.wait_readable
+        true
+      end
+    end
+
     # Read data from the host until a certain sequence is matched.
     #
     # If a block is given, the received data will be yielded as it
@@ -553,8 +578,8 @@ module Net
       line = ''
       buf = ''
       rest = ''
-      until(prompt === line and not IO::select([@sock], nil, nil, waittime))
-        unless IO::select([@sock], nil, nil, time_out)
+      until(prompt === line and ((!waittime || waittime ==0) or not wait_readable(waittime)))
+        if time_out && !wait_readable(time_out)
           raise TimeoutError, "timed out while waiting for more data"
         end
         begin
@@ -611,9 +636,9 @@ module Net
     def write(string)
       length = string.length
       while 0 < length
-        IO::select(nil, [@sock])
+        @sock.wait_writable
         @dumplog.log_dump('>', string[-length..-1]) if @options.has_key?("Dump_log")
-        length -= @sock.syswrite(string[-length..-1])
+        length -= @sock.write(string[-length..-1])
       end
     end
 
@@ -761,4 +786,5 @@ module Net
 
   end  # class Telnet
 end  # module Net
+end  # module Celluloid
 
